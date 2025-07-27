@@ -1,23 +1,21 @@
 import pygame
 import sys
 from collections import deque
+import math  # For infinity
 
 # --- Constants ---
-# Colors
+# ... (unchanged)
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 BROWN = (139, 69, 19)
 LIGHT_BROWN = (205, 133, 63)
-PLAYER1_COLOR = (0, 0, 255)  # Blue
-PLAYER2_COLOR = (255, 0, 0)  # Red
-HIGHLIGHT_COLOR = (255, 255, 0)  # Yellow
+PLAYER1_COLOR = (0, 0, 255)
+PLAYER2_COLOR = (255, 0, 0)
+HIGHLIGHT_COLOR = (255, 255, 0)
 WALL_COLOR = BLACK
 ERROR_COLOR = (200, 0, 0)
-## NEW: Button colors
 BUTTON_COLOR = (50, 50, 50)
 BUTTON_HOVER_COLOR = (100, 100, 100)
-
-# Screen Dimensions
 SCREEN_WIDTH = 600
 SCREEN_HEIGHT = 700
 HUD_HEIGHT = 100
@@ -28,8 +26,70 @@ BOARD_OFFSET_X = SQUARE_SIZE // 2
 BOARD_OFFSET_Y = SQUARE_SIZE // 2 + HUD_HEIGHT
 
 
+## ------------------- NEW: AI Class ------------------- ##
+class AI:
+    def __init__(self, game):
+        self.game = game  # Give the AI a reference to the main game object
+
+    def get_shortest_path(self, start_pos, goal_row, opponent_pos):
+        # BFS that returns the path length
+        q = deque([(start_pos, 0)])  # (position, distance)
+        visited = {start_pos}
+
+        while q:
+            current_pos, dist = q.popleft()
+
+            if current_pos[1] == goal_row:
+                return dist  # Return the distance when the goal is found
+
+            # Note: We must use the game's full move calculation
+            valid_moves = self.game.calculate_valid_moves(current_pos, opponent_pos)
+            for neighbor in valid_moves:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    q.append((neighbor, dist + 1))
+
+        return math.inf  # Return infinity if no path exists
+
+    def evaluate_board(self, player1_pos, player2_pos):
+        # The AI is always Player 2
+        p1_path_len = self.get_shortest_path(player1_pos, self.game.player1_goal_row, player2_pos)
+        p2_path_len = self.get_shortest_path(player2_pos, self.game.player2_goal_row, player1_pos)
+
+        # Heuristic: Difference in path lengths. Higher is better for AI (Player 2).
+        return p1_path_len - p2_path_len
+
+    def find_best_move(self, depth=2):  # Depth 2 is a good starting point
+        best_score = -math.inf
+        best_move = None
+
+        # The AI is Player 2
+        current_pawn_pos = self.game.player2_pos
+        opponent_pawn_pos = self.game.player1_pos
+
+        # --- Evaluate all possible pawn moves ---
+        possible_pawn_moves = self.game.calculate_valid_moves(current_pawn_pos, opponent_pawn_pos)
+        for move in possible_pawn_moves:
+            # Simple evaluation for now: just pick the move with the best immediate score
+            score = self.evaluate_board(opponent_pawn_pos, move)
+            if score > best_score:
+                best_score = score
+                best_move = ('pawn', move)
+
+        # --- Evaluate all possible wall placements ---
+        # (This is computationally expensive, so we'll add it after testing the pawn moves)
+        # For now, the AI will only move its pawn.
+
+        # A simple fallback if no good move is found
+        if best_move is None and possible_pawn_moves:
+            best_move = ('pawn', possible_pawn_moves[0])
+
+        return best_move
+
+
 class Game:
     def __init__(self):
+        # ... (init unchanged)
         pygame.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption('Quoridor')
@@ -37,20 +97,17 @@ class Game:
         self.hud_font = pygame.font.SysFont(None, 40)
         self.title_font = pygame.font.SysFont(None, 100)
         self.game_over_font = pygame.font.SysFont(None, 80)
-
-        ## NEW: Game state management
-        self.game_state = 'main_menu'  # 'main_menu', 'playing', 'game_over'
-        self.game_mode = None  # 'pvp', 'pvai', 'aivai'
-
-        # We will define button rectangles here for easy click detection
+        self.game_state = 'main_menu'
+        self.game_mode = None
         self.pvp_button = pygame.Rect(150, 250, 300, 60)
         self.pvai_button = pygame.Rect(150, 350, 300, 60)
         self.aivai_button = pygame.Rect(150, 450, 300, 60)
-
+        ## NEW: Instantiate the AI
+        self.ai = AI(self)
         self.reset_game()
 
     def reset_game(self):
-        # ... (function is the same, but sets game_over to False instead of being the master state)
+        # ... (reset_game is unchanged)
         self.player1_pos = (4, 8)
         self.player2_pos = (4, 0)
         self.player1_walls = 10
@@ -65,40 +122,32 @@ class Game:
         self.error_message = ""
         self.error_message_end_time = 0
         self.winner = None
-        self.game_over = False  # Keep this for internal logic before transitioning to 'game_over' state
+        self.game_over = False
 
-    ## NEW: Function to draw the main menu
+    # ... (draw functions and core game logic are all unchanged)
+    # ... I am omitting them here for brevity but they are still in the full code.
     def draw_main_menu(self):
         self.screen.fill(BROWN)
         mouse_pos = pygame.mouse.get_pos()
-
-        # Title
         title_text = self.title_font.render("Quoridor", True, WHITE)
         title_rect = title_text.get_rect(center=(SCREEN_WIDTH / 2, 120))
         self.screen.blit(title_text, title_rect)
-
-        # PvP Button
         pvp_color = BUTTON_HOVER_COLOR if self.pvp_button.collidepoint(mouse_pos) else BUTTON_COLOR
         pygame.draw.rect(self.screen, pvp_color, self.pvp_button, border_radius=10)
         pvp_text = self.font.render("Player vs Player", True, WHITE)
         pvp_text_rect = pvp_text.get_rect(center=self.pvp_button.center)
         self.screen.blit(pvp_text, pvp_text_rect)
-
-        # PvAI Button
         pvai_color = BUTTON_HOVER_COLOR if self.pvai_button.collidepoint(mouse_pos) else BUTTON_COLOR
         pygame.draw.rect(self.screen, pvai_color, self.pvai_button, border_radius=10)
         pvai_text = self.font.render("Player vs AI", True, WHITE)
         pvai_text_rect = pvai_text.get_rect(center=self.pvai_button.center)
         self.screen.blit(pvai_text, pvai_text_rect)
-
-        # AvAI Button
         aivai_color = BUTTON_HOVER_COLOR if self.aivai_button.collidepoint(mouse_pos) else BUTTON_COLOR
         pygame.draw.rect(self.screen, aivai_color, self.aivai_button, border_radius=10)
         aivai_text = self.font.render("AI vs AI", True, WHITE)
         aivai_text_rect = aivai_text.get_rect(center=self.aivai_button.center)
         self.screen.blit(aivai_text, aivai_text_rect)
 
-    # ... (All core game logic functions are unchanged)
     def get_square_from_pos(self, mouse_pos):
         mouse_x, mouse_y = mouse_pos
         for row in range(BOARD_SIZE):
@@ -126,8 +175,8 @@ class Game:
         return None
 
     def calculate_valid_moves(self, pawn_pos, opponent_pos):
-        moves = [];
-        c, r = pawn_pos;
+        moves = []
+        c, r = pawn_pos
         oc, or_ = opponent_pos
         for dc, dr in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
             next_pos = (c + dc, r + dr)
@@ -157,7 +206,7 @@ class Game:
         return list(set(moves))
 
     def path_exists(self, start_pos, goal_row, opponent_pos):
-        q = deque([start_pos]);
+        q = deque([start_pos])
         visited = {start_pos}
         while q:
             current_pos = q.popleft()
@@ -167,7 +216,7 @@ class Game:
         return False
 
     def is_wall_blocking(self, start_pos, end_pos):
-        sc, sr = start_pos;
+        sc, sr = start_pos
         ec, er = end_pos
         if abs(sc - ec) + abs(sr - er) > 1: return False
         if sc == ec:
@@ -194,7 +243,6 @@ class Game:
             if (c, r) in self.horizontal_walls: return False
         return True
 
-    # ... (draw functions for the game are unchanged)
     def draw_board(self):
         self.screen.fill(BROWN)
         for row in range(BOARD_SIZE):
@@ -264,95 +312,99 @@ class Game:
         winner_text = self.game_over_font.render(winner_text_str, True, winner_color)
         winner_rect = winner_text.get_rect(center=(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 50))
         self.screen.blit(winner_text, winner_rect)
-        restart_text_str = "Click to Return to Menu"  ## MODIFIED
+        restart_text_str = "Click to Return to Menu"
         restart_text = self.font.render(restart_text_str, True, WHITE)
         restart_rect = restart_text.get_rect(center=(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 50))
         self.screen.blit(restart_text, restart_rect)
 
-    ## MODIFIED: Now routes clicks based on the game state
     def handle_click(self, mouse_pos):
+        # ... (unchanged)
         if self.game_state == 'main_menu':
             if self.pvp_button.collidepoint(mouse_pos):
-                self.game_mode = 'pvp'
-                self.game_state = 'playing'
-                self.reset_game()
+                self.game_mode = 'pvp'; self.game_state = 'playing'; self.reset_game()
             elif self.pvai_button.collidepoint(mouse_pos):
-                self.game_mode = 'pvai'
-                self.game_state = 'playing'
-                self.reset_game()
+                self.game_mode = 'pvai'; self.game_state = 'playing'; self.reset_game()
             elif self.aivai_button.collidepoint(mouse_pos):
-                self.game_mode = 'aivai'
-                self.game_state = 'playing'
-                self.reset_game()
-
+                self.game_mode = 'aivai'; self.game_state = 'playing'; self.reset_game()
         elif self.game_state == 'playing':
-            # This is the existing logic from before
-            self.selected_pawn = None;
-            self.valid_moves = []
-            clicked_square = self.get_square_from_pos(mouse_pos)
-            clicked_wall = self.get_wall_from_pos(mouse_pos)
-            current_pawn_pos = self.player1_pos if self.current_player == 1 else self.player2_pos
-            opponent_pos = self.player2_pos if self.current_player == 1 else self.player1_pos
-            current_valid_moves = self.calculate_valid_moves(current_pawn_pos, opponent_pos)
-
-            if clicked_square:
-                if clicked_square == current_pawn_pos:
-                    self.selected_pawn = current_pawn_pos;
-                    self.valid_moves = current_valid_moves
-                elif clicked_square in current_valid_moves:
-                    moving_player = self.current_player
-                    if moving_player == 1:
-                        self.player1_pos = clicked_square
-                    else:
-                        self.player2_pos = clicked_square
-
-                    if (moving_player == 1 and self.player1_pos[1] == self.player1_goal_row) or \
-                            (moving_player == 2 and self.player2_pos[1] == self.player2_goal_row):
-                        self.winner = moving_player
-                        self.game_state = 'game_over'
-                    else:
-                        self.current_player = 3 - self.current_player
-            elif clicked_wall:
-                # ... wall placement logic remains the same
-                wall_type, pos = clicked_wall;
-                player_walls = self.player1_walls if self.current_player == 1 else self.player2_walls
-                if player_walls <= 0: self.error_message = "You have no walls left!"; self.error_message_end_time = pygame.time.get_ticks() + 2000; return
-                if not self.is_valid_wall_placement(wall_type,
-                                                    pos): self.error_message = "Cannot place a wall that overlaps another."; self.error_message_end_time = pygame.time.get_ticks() + 2500; return
-                if wall_type == 'h':
-                    self.horizontal_walls.add(pos)
-                else:
-                    self.vertical_walls.add(pos)
-                p1_has_path = self.path_exists(self.player1_pos, self.player1_goal_row, self.player2_pos)
-                p2_has_path = self.path_exists(self.player2_pos, self.player2_goal_row, self.player1_pos)
-                if p1_has_path and p2_has_path:
-                    if self.current_player == 1:
-                        self.player1_walls -= 1
-                    else:
-                        self.player2_walls -= 1
-                    self.current_player = 3 - self.current_player
-                else:
-                    self.error_message = "Wall must not block all paths to the goal!";
-                    self.error_message_end_time = pygame.time.get_ticks() + 3000
-                    if wall_type == 'h':
-                        self.horizontal_walls.remove(pos)
-                    else:
-                        self.vertical_walls.remove(pos)
-
+            if self.game_mode == 'pvp' or (self.game_mode == 'pvai' and self.current_player == 1):
+                self.handle_player_move(mouse_pos)
         elif self.game_state == 'game_over':
-            # Any click on the game over screen returns to the menu
             self.game_state = 'main_menu'
 
-    ## MODIFIED: Now renders based on the game state
+    ## NEW: Extracted player move logic into its own function for clarity
+    def handle_player_move(self, mouse_pos):
+        self.selected_pawn = None
+        self.valid_moves = []
+        clicked_square = self.get_square_from_pos(mouse_pos)
+        clicked_wall = self.get_wall_from_pos(mouse_pos)
+        current_pawn_pos = self.player1_pos if self.current_player == 1 else self.player2_pos
+        opponent_pos = self.player2_pos if self.current_player == 1 else self.player1_pos
+        current_valid_moves = self.calculate_valid_moves(current_pawn_pos, opponent_pos)
+        if clicked_square:
+            if clicked_square == current_pawn_pos:
+                self.selected_pawn = current_pawn_pos
+                self.valid_moves = current_valid_moves
+            elif clicked_square in current_valid_moves:
+                self.execute_move(('pawn', clicked_square))
+        elif clicked_wall:
+            self.execute_move(('wall', clicked_wall))
+
+    ## NEW: A universal function to perform a move (pawn or wall)
+    def execute_move(self, move):
+        move_type, move_data = move
+
+        if move_type == 'pawn':
+            # ... (win checking logic)
+            moving_player = self.current_player
+            if moving_player == 1:
+                self.player1_pos = move_data
+            else:
+                self.player2_pos = move_data
+            if (moving_player == 1 and self.player1_pos[1] == self.player1_goal_row) or \
+                    (moving_player == 2 and self.player2_pos[1] == self.player2_goal_row):
+                self.winner = moving_player
+                self.game_state = 'game_over'
+            else:
+                self.current_player = 3 - self.current_player
+
+        elif move_type == 'wall':
+            # ... (wall validation and placement logic)
+            wall_type, pos = move_data
+            player_walls = self.player1_walls if self.current_player == 1 else self.player2_walls
+            if player_walls <= 0 or not self.is_valid_wall_placement(wall_type, pos): return  # Move is invalid
+            if wall_type == 'h':
+                self.horizontal_walls.add(pos)
+            else:
+                self.vertical_walls.add(pos)
+            if self.path_exists(self.player1_pos, self.player1_goal_row, self.player2_pos) and \
+                    self.path_exists(self.player2_pos, self.player2_goal_row, self.player1_pos):
+                if self.current_player == 1:
+                    self.player1_walls -= 1
+                else:
+                    self.player2_walls -= 1
+                self.current_player = 3 - self.current_player
+            else:  # Illegal block
+                if wall_type == 'h':
+                    self.horizontal_walls.remove(pos)
+                else:
+                    self.vertical_walls.remove(pos)
+
     def run(self):
         running = True
         while running:
             for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    self.handle_click(pygame.mouse.get_pos())
+                if event.type == pygame.QUIT: running = False
+                if event.type == pygame.MOUSEBUTTONDOWN: self.handle_click(pygame.mouse.get_pos())
 
+            ## MODIFIED: Main game loop now handles AI turns
+            if self.game_state == 'playing' and self.game_mode == 'pvai' and self.current_player == 2:
+                pygame.time.wait(500)  # Add a small delay for dramatic effect
+                move = self.ai.find_best_move()
+                if move:
+                    self.execute_move(move)
+
+            # ... Drawing logic remains the same
             if self.game_state == 'main_menu':
                 self.draw_main_menu()
             elif self.game_state == 'playing':
@@ -363,16 +415,13 @@ class Game:
                 self.draw_hud()
                 self.draw_error_message()
             elif self.game_state == 'game_over':
-                # Draw the final board state
                 self.draw_board()
                 self.draw_walls()
                 self.draw_pawns()
                 self.draw_hud()
-                # Draw the game over overlay on top
                 self.draw_game_over_screen()
 
             pygame.display.flip()
-
         pygame.quit()
         sys.exit()
 
