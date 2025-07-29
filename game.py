@@ -33,55 +33,218 @@ BOARD_OFFSET_Y = SQUARE_SIZE // 2 + HUD_HEIGHT
 
 
 class AI:
-    def __init__(self, game):
-        self.game = game  # Give the AI a reference to the main game object
+    def __init__(self, game, depth=3):
+        self.game = game
+        # Depth 3 is a good balance of speed and challenge.
+        # Higher values like 4 will be VERY slow.
+        self.depth = depth
 
-    def get_shortest_path(self, start_pos, goal_row, opponent_pos):
-        # BFS that returns the path length
-        q = deque([(start_pos, 0)])  # (position, distance)
+    # This is a new helper function that belongs to the AI.
+    # It checks for valid wall placements within a *simulated* board state.
+    def is_valid_wall_in_sim(self, wall_type, pos, h_walls, v_walls):
+        c, r = pos
+        # 1. Boundary Check: Ensure the wall is not "hanging" off the board.
+        if not (0 <= c < BOARD_SIZE - 1 and 0 <= r < BOARD_SIZE - 1):
+            return False
+
+        # 2. Overlap Check: Use the passed-in simulated wall sets.
+        if wall_type == 'h':
+            if (c, r) in h_walls or (c - 1, r) in h_walls or (c + 1, r) in h_walls: return False
+            if (c, r) in v_walls: return False
+        elif wall_type == 'v':
+            if (c, r) in v_walls or (c, r - 1) in v_walls or (c, r + 1) in v_walls: return False
+            if (c, r) in h_walls: return False
+        return True
+
+    def get_shortest_path(self, start_pos, goal_row, opponent_pos, h_walls, v_walls):
+        # This function simulates pathfinding on a given board state without
+        # modifying the actual game board, which is crucial for Minimax.
+        q = deque([(start_pos, 0)])
         visited = {start_pos}
+
+        # Temporarily grant the game object access to the simulated walls
+        # so calculate_valid_moves can use them.
+        original_h = self.game.horizontal_walls
+        original_v = self.game.vertical_walls
+        self.game.horizontal_walls = h_walls
+        self.game.vertical_walls = v_walls
+
+        path_dist = math.inf
 
         while q:
             current_pos, dist = q.popleft()
 
             if current_pos[1] == goal_row:
-                return dist  # Return the distance when the goal is found
+                path_dist = dist
+                break  # Found the shortest path
 
-            # Note: We must use the game's full move calculation
-            valid_moves = self.game.calculate_valid_moves(current_pos, opponent_pos)
-            for neighbor in valid_moves:
+            for neighbor in self.game.calculate_valid_moves(current_pos, opponent_pos):
                 if neighbor not in visited:
                     visited.add(neighbor)
                     q.append((neighbor, dist + 1))
 
-        return math.inf  # Return infinity if no path exists
+        # IMPORTANT: Restore the actual game board state
+        self.game.horizontal_walls = original_h
+        self.game.vertical_walls = original_v
 
-    def evaluate_board(self, player1_pos, player2_pos):
-        # The AI is always Player 2
-        p1_path_len = self.get_shortest_path(player1_pos, self.game.player1_goal_row, player2_pos)
-        p2_path_len = self.get_shortest_path(player2_pos, self.game.player2_goal_row, player1_pos)
+        return path_dist
 
-        # Heuristic: Difference in path lengths. Higher is better for AI (Player 2).
-        return p1_path_len - p2_path_len
+    def evaluate_board(self, p1_pos, p2_pos, p1_walls, p2_walls, h_walls, v_walls):
+        p1_path = self.get_shortest_path(p1_pos, self.game.player1_goal_row, p2_pos, h_walls, v_walls)
+        p2_path = self.get_shortest_path(p2_pos, self.game.player2_goal_row, p1_pos, h_walls, v_walls)
+
+        if p2_path == 0: return math.inf  # AI win is the best outcome
+        if p1_path == 0: return -math.inf  # Human win is the worst outcome
+
+        # Heuristic: The AI wants its path to be short and the opponent's to be long.
+        # It also gets a small bonus for having more walls left.
+        score = (p1_path - p2_path) + (p2_walls - p1_walls) * 0.25
+        return score
+
+    def _get_possible_moves(self, player_pos, opponent_pos, walls_left, h_walls, v_walls):
+        # First, get all valid pawn moves.
+        pawn_moves = self.game.calculate_valid_moves(player_pos, opponent_pos)
+        all_moves = [('pawn', move) for move in pawn_moves]
+
+        if walls_left > 0:
+            oc, or_ = opponent_pos
+            # Heuristic: Only consider placing walls that are adjacent to the opponent.
+            for r in range(or_ - 1, or_ + 2):
+                for c in range(oc - 1, oc + 2):
+                    # Check horizontal wall placement
+                    if self.is_valid_wall_in_sim('h', (c, r), h_walls, v_walls):
+                        all_moves.append(('wall', ('h', (c, r))))
+                    # Check vertical wall placement
+                    if self.is_valid_wall_in_sim('v', (c, r), h_walls, v_walls):
+                        all_moves.append(('wall', ('v', (c, r))))
+
+        return all_moves
+
+    def minimax(self, p1_pos, p2_pos, p1_walls, p2_walls, h_walls, v_walls, depth, alpha, beta, maximizing_player):
+        if depth == 0 or p1_pos[1] == self.game.player1_goal_row or p2_pos[1] == self.game.player2_goal_row:
+            return self.evaluate_board(p1_pos, p2_pos, p1_walls, p2_walls, h_walls, v_walls)
+
+        if maximizing_player:  # AI's turn (Maximizer)
+            max_eval = -math.inf
+            moves = self._get_possible_moves(p2_pos, p1_pos, p2_walls, h_walls, v_walls)
+            for move_type, move_data in moves:
+                if move_type == 'pawn':
+                    eval = self.minimax(p1_pos, move_data, p1_walls, p2_walls, h_walls, v_walls, depth - 1, alpha, beta,
+                                        False)
+                else:  # Wall move
+                    wall_type, pos = move_data
+                    if wall_type == 'h':
+                        h_walls.add(pos)
+                    else:
+                        v_walls.add(pos)
+
+                    # Check if the placement is legal (doesn't block paths)
+                    p1_has_path = self.get_shortest_path(p1_pos, self.game.player1_goal_row, p2_pos, h_walls,
+                                                         v_walls) != math.inf
+                    p2_has_path = self.get_shortest_path(p2_pos, self.game.player2_goal_row, p1_pos, h_walls,
+                                                         v_walls) != math.inf
+
+                    if p1_has_path and p2_has_path:
+                        eval = self.minimax(p1_pos, p2_pos, p1_walls, p2_walls - 1, h_walls, v_walls, depth - 1, alpha,
+                                            beta, False)
+                    else:
+                        eval = -math.inf  # This move is illegal, so it's a terrible choice
+
+                    # Undo the move for the next iteration
+                    if wall_type == 'h':
+                        h_walls.remove(pos)
+                    else:
+                        v_walls.remove(pos)
+
+                max_eval = max(max_eval, eval)
+                alpha = max(alpha, eval)
+                if beta <= alpha: break  # Prune
+            return max_eval
+
+        else:  # Minimizing player's turn (Human)
+            min_eval = math.inf
+            moves = self._get_possible_moves(p1_pos, p2_pos, p1_walls, h_walls, v_walls)
+            for move_type, move_data in moves:
+                if move_type == 'pawn':
+                    eval = self.minimax(move_data, p2_pos, p1_walls, p2_walls, h_walls, v_walls, depth - 1, alpha, beta,
+                                        True)
+                else:  # Wall move
+                    wall_type, pos = move_data
+                    if wall_type == 'h':
+                        h_walls.add(pos)
+                    else:
+                        v_walls.add(pos)
+
+                    p1_has_path = self.get_shortest_path(p1_pos, self.game.player1_goal_row, p2_pos, h_walls,
+                                                         v_walls) != math.inf
+                    p2_has_path = self.get_shortest_path(p2_pos, self.game.player2_goal_row, p1_pos, h_walls,
+                                                         v_walls) != math.inf
+
+                    if p1_has_path and p2_has_path:
+                        eval = self.minimax(p1_pos, p2_pos, p1_walls - 1, p2_walls, h_walls, v_walls, depth - 1, alpha,
+                                            beta, True)
+                    else:
+                        eval = math.inf  # An illegal move for the human is great for the AI
+
+                    if wall_type == 'h':
+                        h_walls.remove(pos)
+                    else:
+                        v_walls.remove(pos)
+
+                min_eval = min(min_eval, eval)
+                beta = min(beta, eval)
+                if beta <= alpha: break  # Prune
+            return min_eval
 
     def find_best_move(self):
-        # We will replace this with Minimax later
         best_score = -math.inf
         best_move = None
-        current_pawn_pos = self.game.player2_pos
-        opponent_pawn_pos = self.game.player1_pos
-        possible_pawn_moves = self.game.calculate_valid_moves(current_pawn_pos, opponent_pawn_pos)
 
-        for move in possible_pawn_moves:
-            score = self.evaluate_board(opponent_pawn_pos, move)
-            if score > best_score:
-                best_score = score
-                best_move = ('pawn', move)
+        p1_pos = self.game.player1_pos
+        p2_pos = self.game.player2_pos
+        p1_walls = self.game.player1_walls
+        p2_walls = self.game.player2_walls
 
-        if best_move is None and possible_pawn_moves:
+        # The AI MUST have a fallback move in case all "smart" moves are bad.
+        # The simplest valid move is its first available pawn move.
+        possible_pawn_moves = self.game.calculate_valid_moves(p2_pos, p1_pos)
+        if possible_pawn_moves:
             best_move = ('pawn', possible_pawn_moves[0])
 
-        # The AI thread will store its result here
+        # Get all possible moves to evaluate
+        possible_moves = self._get_possible_moves(p2_pos, p1_pos, p2_walls, self.game.horizontal_walls,
+                                                  self.game.vertical_walls)
+
+        for move_type, move_data in possible_moves:
+            h_walls_copy = self.game.horizontal_walls.copy()
+            v_walls_copy = self.game.vertical_walls.copy()
+
+            if move_type == 'pawn':
+                score = self.minimax(p1_pos, move_data, p1_walls, p2_walls, h_walls_copy, v_walls_copy, self.depth,
+                                     -math.inf, math.inf, False)
+            else:  # Wall move
+                wall_type, pos = move_data
+                if wall_type == 'h':
+                    h_walls_copy.add(pos)
+                else:
+                    v_walls_copy.add(pos)
+
+                # We must re-check path blocking here at the top level
+                p1_has_path = self.get_shortest_path(p1_pos, self.game.player1_goal_row, p2_pos, h_walls_copy,
+                                                     v_walls_copy) != math.inf
+                p2_has_path = self.get_shortest_path(p2_pos, self.game.player2_goal_row, p1_pos, h_walls_copy,
+                                                     v_walls_copy) != math.inf
+
+                if not (p1_has_path and p2_has_path):
+                    continue  # Skip this illegal wall placement entirely
+
+                score = self.minimax(p1_pos, p2_pos, p1_walls, p2_walls - 1, h_walls_copy, v_walls_copy, self.depth,
+                                     -math.inf, math.inf, False)
+
+            if score > best_score:
+                best_score = score
+                best_move = (move_type, move_data)
+
         self.game.ai_move_result = best_move
 
 
