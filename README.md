@@ -104,15 +104,20 @@ The AI's intelligence was significantly boosted by drawing inspiration from acad
 
 ## ▶️ How to Play
 
-### Using the Executable (Easy)
+There are two ways to play the game: by downloading the pre-compiled executable (recommended for most users) or by running the script from the source code (for developers).
 
-1.  Navigate to the `dist` folder.
-2.  Double-click the `Quoridor.exe` file.
-3.  The game will launch. No installation is required.
+### 1. Download the Latest Release (Easy)
 
-### Running from Source (Developer)
+This is the simplest way to play. No installation is required.
 
-If you want to run the game from the Python source code, you'll need Python and Pygame installed.
+1.  **Go to the [Releases Page](https://github.com/Rasheed-Al-Qobbaj/Quoridor_AI/releases)** of this repository.
+2.  Under the assets for the latest release (e.g., `v1.0.0`), download the `.zip` file for your operating system (e.g., `Quoridor-v1.0.0-Windows.zip`).
+3.  **Unzip** the downloaded file.
+4.  Double-click the **`Quoridor.exe`** file inside the unzipped folder to launch the game.
+
+### 2. Running from Source (Developer)
+
+If you want to run or modify the game from the Python source code, you'll need Python and Pygame installed.
 
 1.  **Clone the repository:**
     ```sh
@@ -127,7 +132,6 @@ If you want to run the game from the Python source code, you'll need Python and 
     ```sh
     python game.py
     ```
-
 ---
 
 ## 📁 Project Structure
