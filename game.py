@@ -7,21 +7,21 @@ import time
 
 # --- Constants ---
 # Colors
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-BROWN = (139, 69, 19)
-LIGHT_BROWN = (205, 133, 63)
-PLAYER1_COLOR = (0, 0, 255)
-PLAYER2_COLOR = (255, 0, 0)
-HIGHLIGHT_COLOR = (255, 255, 0)
-WALL_COLOR = BLACK
+WHITE = (236, 236, 236)
+BLACK = (20, 20, 20)
+BROWN = (39, 28, 19)
+LIGHT_BROWN = (210, 180, 140)
+PLAYER1_COLOR = (65, 105, 225)
+PLAYER2_COLOR = (220, 20, 60)
+HIGHLIGHT_COLOR = (255, 215, 0)
+WALL_COLOR = (184, 134, 11)
 ERROR_COLOR = (200, 0, 0)
 BUTTON_COLOR = (50, 50, 50)
 BUTTON_HOVER_COLOR = (100, 100, 100)
 
 # Screen Dimensions
-SCREEN_WIDTH = 600
-SCREEN_HEIGHT = 700
+SCREEN_WIDTH = 650
+SCREEN_HEIGHT = 750
 HUD_HEIGHT = 100
 
 # Board Dimensions
@@ -160,12 +160,13 @@ class AI:
             p1_walls, p2_walls = self.game.player1_walls, self.game.player2_walls
             h_walls, v_walls = self.game.horizontal_walls, self.game.vertical_walls
             best_move_overall = None
+            final_score = 0
 
             for depth in range(1, 10):
                 self.game.ai_search_depth = depth
                 if time.time() - start_time > time_limit: break
 
-                _, best_move_at_depth = self.minimax(p1_pos, p2_pos, p1_walls, p2_walls, h_walls.copy(), v_walls.copy(),
+                score_at_depth, best_move_at_depth = self.minimax(p1_pos, p2_pos, p1_walls, p2_walls, h_walls.copy(), v_walls.copy(),
                                                      depth, -math.inf, math.inf, is_p2_turn)
 
                 if time.time() - start_time > time_limit:
@@ -173,6 +174,7 @@ class AI:
                     break
 
                 best_move_overall = best_move_at_depth
+                final_score = score_at_depth
                 self.move_order_cache = [best_move_at_depth]
 
             if best_move_overall is None:
@@ -182,6 +184,7 @@ class AI:
                 if possible_moves: best_move_overall = ('pawn', possible_moves[0])
 
             result_container['move'] = best_move_overall
+            result_container['score'] = final_score
 
         result = {}
         thread = threading.Thread(target=minimax_wrapper, args=(result,))
@@ -193,11 +196,21 @@ class Game:
     def __init__(self):
         pygame.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        self.clock = pygame.time.Clock()
         pygame.display.set_caption('Quoridor')
-        self.font = pygame.font.SysFont(None, 50)
-        self.hud_font = pygame.font.SysFont(None, 40)
-        self.title_font = pygame.font.SysFont(None, 100)
-        self.game_over_font = pygame.font.SysFont(None, 80)
+        try:
+            self.title_font = pygame.font.Font("EBGaramond-VariableFont_wght.ttf", 80)
+            self.font = pygame.font.Font("EBGaramond-VariableFont_wght.ttf", 40)
+            self.hud_font = pygame.font.Font("EBGaramond-VariableFont_wght.ttf", 32)
+            self.small_hud_font = pygame.font.Font("EBGaramond-VariableFont_wght.ttf", 28)
+            self.game_over_font = pygame.font.Font("EBGaramond-VariableFont_wght.ttf", 60)
+        except FileNotFoundError:
+            print("Font file not found, using default system font.")
+            self.title_font = pygame.font.SysFont("georgia", 80)
+            self.font = pygame.font.SysFont("segoeui", 40)
+            self.hud_font = pygame.font.SysFont("segoeui", 32)
+            self.small_hud_font = pygame.font.SysFont("segoeui", 28)
+            self.game_over_font = pygame.font.SysFont("segoeui", 60)
         self.game_state = 'main_menu'
         self.game_mode = None
         self.pvp_button = pygame.Rect(150, 250, 300, 60)
@@ -212,8 +225,20 @@ class Game:
         self.ai_time_display_end_time = 0
         self.thinking_animation_angle = 0
         self.ai_search_depth = 0
+        self.pulse_animation_timer = 0
+        self.ghost_wall = None
         self.board_evaluation = 0.0
-        self.eval_bar_rect = pygame.Rect(10, HUD_HEIGHT, 25, SCREEN_HEIGHT - HUD_HEIGHT)
+        board_pixel_height = (BOARD_SIZE * (SQUARE_SIZE - WALL_THICKNESS)) + ((BOARD_SIZE - 1) * WALL_THICKNESS)
+        self.eval_bar_rect = pygame.Rect(
+            BOARD_OFFSET_X - 45,  # Position it to the left of the board
+            BOARD_OFFSET_Y,  # Align with the top of the board
+            25,  # Width of the bar
+            board_pixel_height  # Exact height of the board
+        )
+        self.animating = False
+        self.animation_target_pos = None
+        self.animating_pawn_pixels = [0, 0]
+        self.animation_player = None
         self.reset_game()
 
     def reset_game(self):
@@ -276,21 +301,77 @@ class Game:
             rect = pygame.Rect(x, y, WALL_THICKNESS, SQUARE_SIZE * 2 - WALL_THICKNESS)
             pygame.draw.rect(self.screen, WALL_COLOR, rect)
 
+    def draw_ghost_wall(self):
+        if self.ghost_wall:
+            wall_type, pos = self.ghost_wall
+            c, r = pos
+
+            # Create a semi-transparent surface for the ghost wall
+            ghost_surface = pygame.Surface((SQUARE_SIZE * 2, SQUARE_SIZE * 2), pygame.SRCALPHA)
+
+            # Check if this placement would be valid before drawing
+            is_valid = self.is_valid_wall_placement(wall_type, pos) and (
+                self.player1_walls if self.current_player == 1 else self.player2_walls) > 0
+
+            # Green for valid, Red for invalid
+            ghost_color = (65, 105, 225, 120) if is_valid else (220, 20, 60, 120)
+
+            if wall_type == 'h':
+                x = BOARD_OFFSET_X + c * SQUARE_SIZE
+                y = BOARD_OFFSET_Y + r * SQUARE_SIZE + (SQUARE_SIZE - WALL_THICKNESS)
+                rect = pygame.Rect(x, y, SQUARE_SIZE * 2 - WALL_THICKNESS, WALL_THICKNESS)
+            else:  # 'v'
+                x = BOARD_OFFSET_X + c * SQUARE_SIZE + (SQUARE_SIZE - WALL_THICKNESS)
+                y = BOARD_OFFSET_Y + r * SQUARE_SIZE
+                rect = pygame.Rect(x, y, WALL_THICKNESS, SQUARE_SIZE * 2 - WALL_THICKNESS)
+
+            pygame.draw.rect(self.screen, ghost_color, rect, border_radius=3)
+
     def draw_pawns(self):
-        p1_x = BOARD_OFFSET_X + self.player1_pos[0] * SQUARE_SIZE + (SQUARE_SIZE - WALL_THICKNESS) / 2
-        p1_y = BOARD_OFFSET_Y + self.player1_pos[1] * SQUARE_SIZE + (SQUARE_SIZE - WALL_THICKNESS) / 2
-        pygame.draw.circle(self.screen, PLAYER1_COLOR, (p1_x, p1_y), SQUARE_SIZE / 3)
-        p2_x = BOARD_OFFSET_X + self.player2_pos[0] * SQUARE_SIZE + (SQUARE_SIZE - WALL_THICKNESS) / 2
-        p2_y = BOARD_OFFSET_Y + self.player2_pos[1] * SQUARE_SIZE + (SQUARE_SIZE - WALL_THICKNESS) / 2
-        pygame.draw.circle(self.screen, PLAYER2_COLOR, (p2_x, p2_y), SQUARE_SIZE / 3)
+        # --- Draw Player 1 ---
+        # If P1 is animating, draw it at its current pixel position
+        if self.animating and self.animation_player == 1:
+            pygame.draw.circle(self.screen, PLAYER1_COLOR, self.animating_pawn_pixels, SQUARE_SIZE / 3)
+        else:  # Otherwise, draw it at its normal grid position
+            p1_x = BOARD_OFFSET_X + self.player1_pos[0] * SQUARE_SIZE + (SQUARE_SIZE - WALL_THICKNESS) / 2
+            p1_y = BOARD_OFFSET_Y + self.player1_pos[1] * SQUARE_SIZE + (SQUARE_SIZE - WALL_THICKNESS) / 2
+            pygame.draw.circle(self.screen, PLAYER1_COLOR, (p1_x, p1_y), SQUARE_SIZE / 3)
+
+        # --- Draw Player 2 ---
+        # If P2 is animating, draw it at its current pixel position
+        if self.animating and self.animation_player == 2:
+            pygame.draw.circle(self.screen, PLAYER2_COLOR, self.animating_pawn_pixels, SQUARE_SIZE / 3)
+        else:  # Otherwise, draw it at its normal grid position
+            p2_x = BOARD_OFFSET_X + self.player2_pos[0] * SQUARE_SIZE + (SQUARE_SIZE - WALL_THICKNESS) / 2
+            p2_y = BOARD_OFFSET_Y + self.player2_pos[1] * SQUARE_SIZE + (SQUARE_SIZE - WALL_THICKNESS) / 2
+            pygame.draw.circle(self.screen, PLAYER2_COLOR, (p2_x, p2_y), SQUARE_SIZE / 3)
 
     def draw_valid_moves(self):
+        if not self.valid_moves:
+            return
+
+        # Create a pulsing effect for the size of the highlight rectangle
+        # The value will smoothly oscillate between 0.0 and 1.0
+        pulse = (math.sin(self.pulse_animation_timer * 0.05) + 1) / 2
+
+        # This will make the inset oscillate between 4 and 8 pixels
+        inset = 4 + pulse * 4
+
         for move in self.valid_moves:
             col, row = move
             x = BOARD_OFFSET_X + col * SQUARE_SIZE
             y = BOARD_OFFSET_Y + row * SQUARE_SIZE
-            rect = pygame.Rect(x + 5, y + 5, SQUARE_SIZE - WALL_THICKNESS - 10, SQUARE_SIZE - WALL_THICKNESS - 10)
-            pygame.draw.rect(self.screen, HIGHLIGHT_COLOR, rect, 3)
+
+            # Create a rectangle that shrinks and grows by changing its inset from the square's edge
+            rect = pygame.Rect(
+                x + inset,
+                y + inset,
+                (SQUARE_SIZE - WALL_THICKNESS) - (inset * 2),
+                (SQUARE_SIZE - WALL_THICKNESS) - (inset * 2)
+            )
+
+            # The color is now a constant gold
+            pygame.draw.rect(self.screen, HIGHLIGHT_COLOR, rect, 3, border_radius=5)
 
     def get_square_from_pos(self, mouse_pos):
         mouse_x, mouse_y = mouse_pos
@@ -392,52 +473,73 @@ class Game:
             if (c, r) in self.horizontal_walls: return False
         return True
 
-    def draw_ai_status(self, player_number):
-        is_p1 = player_number == 1
-        status_center_x = SCREEN_WIDTH / 4 if is_p1 else SCREEN_WIDTH * 3 / 4
-        text_color = PLAYER1_COLOR if is_p1 else PLAYER2_COLOR
-
-        if self.ai_is_thinking and self.current_player == player_number:
-            thinking_text_str = f"P{player_number} thinking (D:{self.ai_search_depth})"
-            thinking_text = self.hud_font.render(thinking_text_str, True, text_color)
-            thinking_rect = thinking_text.get_rect(center=(status_center_x, 35))
-            self.screen.blit(thinking_text, thinking_rect)
-            arc_center = (status_center_x, 70)
-            arc_rect = pygame.Rect(arc_center[0] - 15, arc_center[1] - 15, 30, 30)
-            start_angle = math.radians(self.thinking_animation_angle)
-            end_angle = math.radians(self.thinking_animation_angle + 270)
-            pygame.draw.arc(self.screen, WHITE, arc_rect, start_angle, end_angle, 4)
-            self.thinking_animation_angle = (self.thinking_animation_angle - 15) % 360
 
     def draw_hud(self):
-        # Player 1 status area
-        if self.game_mode == 'pvp' and self.current_player == 1:
-            turn_text = self.font.render("P1's Turn", True, PLAYER1_COLOR)
-            turn_rect = turn_text.get_rect(center=(SCREEN_WIDTH / 4, 35));
-            self.screen.blit(turn_text, turn_rect)
-        elif self.game_mode == 'pvai' and self.current_player == 1:
-            turn_text = self.font.render("Your Turn", True, PLAYER1_COLOR)
-            turn_rect = turn_text.get_rect(center=(SCREEN_WIDTH / 4, 35));
-            self.screen.blit(turn_text, turn_rect)
-        elif self.game_mode == 'aivai' and self.current_player == 1:
-            self.draw_ai_status(1)
+        p1_hud_area = pygame.Rect(0, 0, SCREEN_WIDTH / 3, HUD_HEIGHT)
+        p2_hud_area = pygame.Rect(SCREEN_WIDTH * 2 / 3, 0, SCREEN_WIDTH / 3, HUD_HEIGHT)
 
-        # Player 2 status area
-        if self.game_mode == 'pvp' and self.current_player == 2:
-            turn_text = self.font.render("P2's Turn", True, PLAYER2_COLOR)
-            turn_rect = turn_text.get_rect(center=(SCREEN_WIDTH * 3 / 4, 35));
-            self.screen.blit(turn_text, turn_rect)
-        elif self.game_mode in ['pvai', 'aivai'] and self.current_player == 2:
-            self.draw_ai_status(2)
+        # --- Determine AI thinking status ---
+        is_p1_thinking = self.ai_is_thinking and self.current_player == 1 and self.game_mode == 'aivai'
+        is_p2_thinking = self.ai_is_thinking and self.current_player == 2 and self.game_mode in ['pvai', 'aivai']
 
-        p1_wall_text_str = f"Walls: {self.player1_walls}"
-        p1_wall_text = self.hud_font.render(p1_wall_text_str, True, PLAYER1_COLOR)
-        p1_wall_rect = p1_wall_text.get_rect(center=(SCREEN_WIDTH / 4, 70));
-        self.screen.blit(p1_wall_text, p1_wall_rect)
-        p2_wall_text_str = f"Walls: {self.player2_walls}"
-        p2_wall_text = self.hud_font.render(p2_wall_text_str, True, PLAYER2_COLOR)
-        p2_wall_rect = p2_wall_text.get_rect(center=(SCREEN_WIDTH * 3 / 4, 70));
-        self.screen.blit(p2_wall_text, p2_wall_rect)
+        # --- Player 1 HUD ---
+        if is_p1_thinking:
+            # Show "Thinking..." status for Player 1
+            thinking_text = self.hud_font.render("Thinking...", True, PLAYER1_COLOR)
+            thinking_rect = thinking_text.get_rect(center=(p1_hud_area.centerx, 30))
+            self.screen.blit(thinking_text, thinking_rect)
+            depth_text = self.small_hud_font.render(f"Depth: {self.ai_search_depth}", True, WHITE)
+            depth_rect = depth_text.get_rect(center=(p1_hud_area.centerx, 70))
+            self.screen.blit(depth_text, depth_rect)
+            # Rotating arc animation for P1
+            arc_center_y = thinking_rect.centery
+            arc_center_x = p1_hud_area.left + 25
+            arc_rect = pygame.Rect(arc_center_x - 12, arc_center_y - 12, 24, 24)
+            start_angle = math.radians(self.thinking_animation_angle)
+            end_angle = math.radians(self.thinking_animation_angle + 270)
+            pygame.draw.arc(self.screen, PLAYER1_COLOR, arc_rect, start_angle, end_angle, 3)
+            self.thinking_animation_angle = (self.thinking_animation_angle - 15) % 360
+        else:
+            # Show standard info for Player 1
+            p1_title_text = self.hud_font.render("Player 1", True, PLAYER1_COLOR)
+            p1_title_rect = p1_title_text.get_rect(center=(p1_hud_area.centerx, 30))
+            self.screen.blit(p1_title_text, p1_title_rect)
+            p1_wall_text = self.small_hud_font.render(f"Walls: {self.player1_walls}", True, WHITE)
+            p1_wall_rect = p1_wall_text.get_rect(center=(p1_hud_area.centerx, 70))
+            self.screen.blit(p1_wall_text, p1_wall_rect)
+
+        # --- Player 2 HUD ---
+        if is_p2_thinking:
+            # Show "Thinking..." status for Player 2
+            thinking_text = self.hud_font.render("Thinking...", True, PLAYER2_COLOR)
+            thinking_rect = thinking_text.get_rect(center=(p2_hud_area.centerx, 30))
+            self.screen.blit(thinking_text, thinking_rect)
+            depth_text = self.small_hud_font.render(f"Depth: {self.ai_search_depth}", True, WHITE)
+            depth_rect = depth_text.get_rect(center=(p2_hud_area.centerx, 70))
+            self.screen.blit(depth_text, depth_rect)
+            # Rotating arc animation for P2
+            arc_center_y = thinking_rect.centery
+            arc_center_x = p2_hud_area.right - 25
+            arc_rect = pygame.Rect(arc_center_x - 12, arc_center_y - 12, 24, 24)
+            start_angle = math.radians(self.thinking_animation_angle)
+            end_angle = math.radians(self.thinking_animation_angle + 270)
+            pygame.draw.arc(self.screen, PLAYER2_COLOR, arc_rect, start_angle, end_angle, 3)
+            self.thinking_animation_angle = (self.thinking_animation_angle - 15) % 360
+        else:
+            # Show standard info for Player 2
+            p2_title_text = self.hud_font.render("Player 2", True, PLAYER2_COLOR)
+            p2_title_rect = p2_title_text.get_rect(center=(p2_hud_area.centerx, 30))
+            self.screen.blit(p2_title_text, p2_title_rect)
+            p2_wall_text = self.small_hud_font.render(f"Walls: {self.player2_walls}", True, WHITE)
+            p2_wall_rect = p2_wall_text.get_rect(center=(p2_hud_area.centerx, 70))
+            self.screen.blit(p2_wall_text, p2_wall_rect)
+
+        # --- Turn Indicator (only shown when AI is not thinking) ---
+        if not self.ai_is_thinking:
+            if self.current_player == 1:
+                pygame.draw.circle(self.screen, HIGHLIGHT_COLOR, (p1_hud_area.left + 25, 30), 8)
+            else:
+                pygame.draw.circle(self.screen, HIGHLIGHT_COLOR, (p2_hud_area.left + 25, 30), 8)
 
     def draw_error_message(self):
         current_time = pygame.time.get_ticks()
@@ -460,6 +562,33 @@ class Game:
         restart_text = self.font.render(restart_text_str, True, WHITE)
         restart_rect = restart_text.get_rect(center=(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 50))
         self.screen.blit(restart_text, restart_rect)
+
+    def draw_evaluation_bar(self):
+        border_rect = self.eval_bar_rect.inflate(4, 4)
+        pygame.draw.rect(self.screen, BLACK, border_rect, border_radius=5)
+
+        pygame.draw.rect(self.screen, (50, 50, 50), self.eval_bar_rect)
+
+        squashed_eval = math.tanh(self.board_evaluation / 10.0)
+        p1_height_ratio = (squashed_eval + 1) / 2.0
+        p1_height = self.eval_bar_rect.height * p1_height_ratio
+
+        p1_bar_rect = pygame.Rect(
+            self.eval_bar_rect.left,
+            self.eval_bar_rect.top,
+            self.eval_bar_rect.width,
+            p1_height
+        )
+
+        p2_bar_rect = pygame.Rect(
+            self.eval_bar_rect.left,
+            self.eval_bar_rect.top + p1_height,
+            self.eval_bar_rect.width,
+            self.eval_bar_rect.height - p1_height
+        )
+
+        pygame.draw.rect(self.screen, PLAYER1_COLOR, p1_bar_rect)
+        pygame.draw.rect(self.screen, PLAYER2_COLOR, p2_bar_rect)
 
     def handle_click(self, mouse_pos):
         if self.ai_is_thinking: return
@@ -496,16 +625,22 @@ class Game:
         move_type, move_data = move
         if move_type == 'pawn':
             moving_player = self.current_player
+            self.animating = True
+            self.animation_player = moving_player
+            self.animation_target_pos = move_data  # The target grid square (e.g., (4, 7))
+
+            # Store the current pixel position of the pawn that is about to move
+            start_pos = self.player1_pos if moving_player == 1 else self.player2_pos
+            self.animating_pawn_pixels[0] = BOARD_OFFSET_X + start_pos[0] * SQUARE_SIZE + (
+                        SQUARE_SIZE - WALL_THICKNESS) / 2
+            self.animating_pawn_pixels[1] = BOARD_OFFSET_Y + start_pos[1] * SQUARE_SIZE + (
+                        SQUARE_SIZE - WALL_THICKNESS) / 2
+
+            # Update the logical position immediately, but the visual one will animate
             if moving_player == 1:
                 self.player1_pos = move_data
             else:
                 self.player2_pos = move_data
-            pawn_pos = self.player1_pos if moving_player == 1 else self.player2_pos
-            goal_row = self.player1_goal_row if moving_player == 1 else self.player2_goal_row
-            if pawn_pos[1] == goal_row:
-                self.winner, self.game_state = moving_player, 'game_over'
-            else:
-                self.current_player = 3 - self.current_player
         elif move_type == 'wall':
             wall_type, pos = move_data
             if self.is_valid_wall_placement(wall_type, pos):
@@ -531,11 +666,47 @@ class Game:
     def run(self):
         running = True
         while running:
+            self.pulse_animation_timer += 1
+            if self.animating:
+                # Calculate the destination pixel position
+                target_x = BOARD_OFFSET_X + self.animation_target_pos[0] * SQUARE_SIZE + (
+                            SQUARE_SIZE - WALL_THICKNESS) / 2
+                target_y = BOARD_OFFSET_Y + self.animation_target_pos[1] * SQUARE_SIZE + (
+                            SQUARE_SIZE - WALL_THICKNESS) / 2
+
+                # --- NEW VECTOR-BASED MOVEMENT ---
+                # Calculate the vector from current position to target
+                dx = target_x - self.animating_pawn_pixels[0]
+                dy = target_y - self.animating_pawn_pixels[1]
+                distance = math.hypot(dx, dy)
+
+                # Define a constant speed in pixels per frame
+                animation_speed = 15
+
+                # If we are close enough to the target, snap to it and end the animation
+                if distance < animation_speed:
+                    self.animating_pawn_pixels[0] = target_x
+                    self.animating_pawn_pixels[1] = target_y
+                    self.animating = False  # Stop the animation
+
+                    # --- Logic that happens *after* a move is complete ---
+                    pawn_pos = self.player1_pos if self.animation_player == 1 else self.player2_pos
+                    goal_row = self.player1_goal_row if self.animation_player == 1 else self.player2_goal_row
+                    if pawn_pos[1] == goal_row:
+                        self.winner, self.game_state = self.animation_player, 'game_over'
+                    else:
+                        self.current_player = 3 - self.current_player
+                else:
+                    # Move by a fixed amount (speed) along the vector
+                    self.animating_pawn_pixels[0] += (dx / distance) * animation_speed
+                    self.animating_pawn_pixels[1] += (dy / distance) * animation_speed
             for event in pygame.event.get():
                 if event.type == pygame.QUIT: running = False
-                if event.type == pygame.MOUSEBUTTONDOWN: self.handle_click(pygame.mouse.get_pos())
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if not self.animating:
+                        self.handle_click(pygame.mouse.get_pos())
 
-            is_ai_turn_now = not self.ai_is_thinking and self.game_state == 'playing' and (
+            is_ai_turn_now = not self.ai_is_thinking and self.game_state == 'playing' and not self.animating and (
                     (self.game_mode == 'pvai' and self.current_player == 2) or
                     (self.game_mode == 'aivai')
             )
@@ -552,7 +723,13 @@ class Game:
                     self.ai_is_thinking = False
                     self.ai_time_taken = time.time() - self.ai_start_time
                     self.ai_time_display_end_time = time.time() + 2
-                    move = thread_info['result_dict'].get('move')
+                    result_dict = thread_info['result_dict']
+                    move = result_dict.get('move')
+                    score = result_dict.get('score')
+
+                    if score is not None:
+                        self.board_evaluation = score
+
                     if move:
                         self.execute_move(move)
                     else:
@@ -561,19 +738,37 @@ class Game:
                         pawn_moves = self.calculate_valid_moves(my_pos, op_pos)
                         if pawn_moves: self.execute_move(('pawn', pawn_moves[0]))
 
+            is_human_turn = not self.ai_is_thinking and not self.animating and (
+                    self.game_mode == 'pvp' or (self.game_mode == 'pvai' and self.current_player == 1)
+            )
+            if is_human_turn:
+                mouse_pos = pygame.mouse.get_pos()
+                # Check for a square click first to avoid overlaps
+                clicked_square = self.get_square_from_pos(mouse_pos)
+                if not clicked_square:
+                    self.ghost_wall = self.get_wall_from_pos(mouse_pos)
+                else:
+                    self.ghost_wall = None
+            else:
+                self.ghost_wall = None
+
             self.screen.fill(BROWN)
             if self.game_state == 'main_menu':
                 self.draw_main_menu()
             elif self.game_state == 'playing' or self.game_state == 'game_over':
-                self.draw_board();
+                self.draw_board()
                 self.draw_walls()
                 if self.game_state == 'playing': self.draw_valid_moves()
-                self.draw_pawns();
-                self.draw_hud();
+                self.draw_ghost_wall()
+                self.draw_pawns()
+                self.draw_hud()
                 self.draw_error_message()
+                self.draw_evaluation_bar()
                 if self.game_state == 'game_over': self.draw_game_over_screen()
+                self.draw_evaluation_bar()
 
             pygame.display.flip()
+            self.clock.tick(60)
         pygame.quit()
         sys.exit()
 
