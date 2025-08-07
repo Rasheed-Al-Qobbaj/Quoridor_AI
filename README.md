@@ -25,6 +25,9 @@ A feature-rich implementation of the abstract strategy board game Quoridor, buil
     *   [Running from Source (Developer)](#running-from-source-developer)
 *   [📁 Project Structure](#-project-structure)
 *   [🛠️ Built With](#️-built-with)
+*  [💡 Challenges & Lessons Learned](#-challenges--lessons-learned)
+*  [🚀 Future Improvements](#-future-improvements)
+*  [📜 License](#-license)
 
 ---
 
