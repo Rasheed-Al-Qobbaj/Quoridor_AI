@@ -4,6 +4,17 @@ from collections import deque
 import math
 import threading
 import time
+import os
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 # --- Constants ---
 # Colors
@@ -199,11 +210,12 @@ class Game:
         self.clock = pygame.time.Clock()
         pygame.display.set_caption('Quoridor')
         try:
-            self.title_font = pygame.font.Font("EBGaramond-VariableFont_wght.ttf", 80)
-            self.font = pygame.font.Font("EBGaramond-VariableFont_wght.ttf", 40)
-            self.hud_font = pygame.font.Font("EBGaramond-VariableFont_wght.ttf", 32)
-            self.small_hud_font = pygame.font.Font("EBGaramond-VariableFont_wght.ttf", 28)
-            self.game_over_font = pygame.font.Font("EBGaramond-VariableFont_wght.ttf", 60)
+            font_path = resource_path("EBGaramond-VariableFont_wght.ttf")
+            self.title_font = pygame.font.Font(font_path, 80)
+            self.font = pygame.font.Font(font_path, 40)
+            self.hud_font = pygame.font.Font(font_path, 32)
+            self.small_hud_font = pygame.font.Font(font_path, 28)
+            self.game_over_font = pygame.font.Font(font_path, 60)
         except FileNotFoundError:
             print("Font file not found, using default system font.")
             self.title_font = pygame.font.SysFont("georgia", 80)
